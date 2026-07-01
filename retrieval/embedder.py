@@ -35,12 +35,13 @@ from config import (
 # It runs LOCALLY — no API calls needed, completely free.
 # First time it runs, it downloads the model (~80MB). After that it's cached.
 MODEL_NAME = "all-MiniLM-L6-v2"
+model_cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_cache")
 
 # We load the model once at module level so it's not reloaded on every search.
 # This is called "module-level initialization" — happens once when Python
 # first imports this file.
 print("Loading embedding model...")
-embedding_model = SentenceTransformer(MODEL_NAME)
+embedding_model = SentenceTransformer(MODEL_NAME, cache_folder=model_cache_path)
 print(f"Embedding model loaded: {MODEL_NAME}")
 
 
