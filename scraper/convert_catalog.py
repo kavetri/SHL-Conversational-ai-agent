@@ -1,14 +1,13 @@
 """
 convert_catalog.py
-Converts the full SHL product catalog JSON (provided by user) into our standard scraper/catalog.json format,
-and then immediately builds the FAISS index!
+Ingests, cleans, and standardizes raw catalog data and builds the TF-IDF index.
 """
+
 import json
 import os
 import sys
 import re
 
-# Paths
 INPUT_PATH = r"c:\Users\riya bhatt\Desktop\SHL\shl_product_catalog.json"
 OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "catalog.json")
 
@@ -36,10 +35,11 @@ TYPE_MAP = {
     "Simulation": "S"
 }
 
-def map_test_type(keys_list, name="", desc=""):
+
+def map_test_type(keys_list, name="", desc="") -> str:
+    """Maps array of descriptive keys or text tokens to matching test type codes."""
     found_codes = []
     
-    # Check explicit keys first
     if isinstance(keys_list, list):
         for k in keys_list:
             for label, code in TYPE_MAP.items():
@@ -50,15 +50,14 @@ def map_test_type(keys_list, name="", desc=""):
             if label.lower() in keys_list.lower() and code not in found_codes:
                 found_codes.append(code)
                 
-    # If no keys matched, try inferring from name or description
     if not found_codes:
         combined = f"{name} {desc}"
         for label, code in TYPE_MAP.items():
             if label.lower() in combined.lower() and code not in found_codes:
                 found_codes.append(code)
                 
-    # Default to K if still empty
     return ",".join(found_codes) if found_codes else "K"
+
 
 def main():
     print("=" * 60)
@@ -77,7 +76,6 @@ def main():
         raw_data = json.loads(content, strict=False)
     except Exception as e:
         print(f"Note: Standard JSON decode failed ({e}), cleaning control characters...")
-        # Replace unescaped control characters (ASCII 0-31 except tab/newline/carriage return)
         content_clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', content)
         raw_data = json.loads(content_clean, strict=False)
         
@@ -95,7 +93,6 @@ def main():
         if not name or not link:
             continue
             
-        # Ensure URL formatting
         url = link if link.startswith("http") else f"https://www.shl.com{link}"
         url = url.rstrip("/") + "/"
         
@@ -114,28 +111,21 @@ def main():
         
     print(f"Processed {len(clean_catalog)} unique assessments.")
     
-    # Save clean catalog
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(clean_catalog, f, ensure_ascii=False, indent=2)
     print(f"Saved cleaned catalog to: {OUTPUT_PATH}")
     
-    # Print sample
-    print("\nSample assessments:")
-    for item in clean_catalog[:5]:
-        print(f"  [{item['test_type']:5}] {item['name']}")
-        print(f"          {item['url']}")
-        
     print("\n" + "=" * 60)
-    print("Now building FAISS vector index...")
+    print("Now building search index...")
     print("=" * 60)
     
-    # Add parent directory to sys.path to import embedder
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from retrieval.embedder import build_index
     build_index()
     
-    print("\nSUCCESS! Catalog converted and FAISS index built ready for API!")
+    print("\nSUCCESS! Catalog converted and search index built ready for API!")
+
 
 if __name__ == "__main__":
     main()
