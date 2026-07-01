@@ -7,3 +7,5 @@ google-generativeai
 faiss-cpu
 python-dotenv
 httpx
+scikit-learn
+numpy
