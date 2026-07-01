@@ -1,104 +1,39 @@
-# SHL Assessment Recommender — Conversational AI & RAG Engine
+# SHL Conversational Assessment Recommender
 
-A production-grade, stateless conversational agent built for **SHL Labs** to assist hiring managers and recruiters in selecting tailored psychometric and technical assessments from the SHL Product Catalog.
+## About the Project
+This project is a conversational assistant that helps hiring managers and recruiters select the right assessments from the SHL product catalog. When a user describes a job role or the skills they want to test, the assistant searches the SHL catalog and recommends a list of relevant assessments.
 
----
+## Features
+- Ask clarifying questions if the user request is too vague.
+- Recommend a list of 1 to 10 matching assessments based on the job requirements.
+- Refine the recommendation list when the user asks to add or remove specific tests.
+- Refuse out-of-scope requests, such as legal or HR strategy questions.
+- Handle a conversation limit of 8 turns.
 
-## 🌟 Key Features & Architectural Highlights
+## Technologies Used
+- FastAPI: Used to build the web API endpoints because it is fast and automatically handles request validation.
+- Python: The primary programming language used for the backend logic.
+- Gemini: Used as the language model to generate natural responses and recommendations.
+- Scikit-Learn: Used to build a TF-IDF text search index because it runs locally with very low memory, preventing out-of-memory issues on free hosting.
+- FAISS: Used to structure the search index files.
 
-1. **Stateless Conversational Architecture (`POST /chat`)**:
-   - Complies strictly with zero-persistence requirements. The full message trajectory is ingested and evaluated on every turn.
-   - Enforces an automated **8-turn conversation limit**, gracefully concluding dialogues before token exhaustion or user fatigue.
+## Project Structure
+- llm: Contains the code for constructing prompts and communicating with the Gemini API.
+- retrieval: Contains the search index logic that finds relevant assessments from the catalog.
+- scraper: Contains the catalog database JSON file and the script that formats the catalog data.
 
-2. **Advanced RAG (Retrieval-Augmented Generation)**:
-   - **Vector Search Engine**: Powered by **FAISS** (`IndexFlatIP`) and HuggingFace's `all-MiniLM-L6-v2` embeddings (384-dimensional semantic space).
-   - **Semantic Clustering**: Encodes assessment names, domain indicators (`K`, `P`, `A`, `S`, `B`, `C`, `D`, `E`), and rich product descriptions to match nuanced queries (e.g., matching *"Java backend developer"* with *"Core Java (Advanced Level)"*).
-   - **Zero-Hallucination Guarantee**: Strict post-processing validation layer validates every LLM-suggested URL against the real scraped catalog. Hallucinated links are stripped or auto-corrected.
+## How It Works
+1. The user sends a chat message to the API.
+2. The API processes the conversation history and constructs a search query.
+3. The retrieval module searches the catalog database using TF-IDF similarity to find the most relevant assessments.
+4. The conversation history and the retrieved assessments are sent to the Gemini LLM.
+5. The LLM generates a JSON response containing a text reply and a list of recommended assessments.
 
-3. **Four Distinct Operational Modes**:
-   - **Mode 1: Clarification**: Detects vague requests (*"I need to hire someone"*) and proactively asks ONE targeted clarifying question while returning an empty recommendation list `[]`.
-   - **Mode 2: Recommendation**: Delivers 1–10 schema-compliant assessment recommendations with exact test type codes and verified official URLs.
-   - **Mode 3: Refinement**: Handles iterative constraints (*"Drop personality tests and add SQL"*) seamlessly without losing dialogue context.
-   - **Mode 4: Out-of-Scope & Legal Refusal**: Gracefully refuses legal compliance advice (*"Is this legal in California?"*) and prompt injections, redirecting users back to SHL product selection.
+## API Endpoints
+- GET /health: Returns a simple status indicating if the server is running.
+- POST /chat: Receives the conversation history and returns the assistant reply with any recommendations.
 
----
-
-## 🛠️ Technology Stack
-
-- **Framework**: FastAPI, Pydantic v2, Uvicorn
-- **LLM Engine**: Google Gemini API (`gemini-2.5-flash` / `gemini-1.5-flash`) via `google-generativeai` with JSON schema enforcement.
-- **Vector Database**: FAISS (Facebook AI Similarity Search) CPU
-- **Embeddings**: `sentence-transformers` (`all-MiniLM-L6-v2`)
-- **Scraping & Data Processing**: Playwright, BeautifulSoup4, Custom Cleaners
-
----
-
-## 📂 Project Structure
-
-```text
-shl-recommender/
-├── main.py                # FastAPI Application entry point (/health & /chat)
-├── models.py              # Pydantic Request & Response contracts
-├── config.py              # Centralized environment & runtime settings
-├── requirements.txt       # Pinned production dependencies
-├── render.yaml            # Render Blueprint for automated cloud deployment
-├── test_api.py            # Local automated verification suite (simulates SHL harness)
-├── llm/
-│   ├── client.py          # Gemini API wrapper with anti-hallucination validation
-│   └── prompts.py         # System prompt instruction set & query builder
-├── retrieval/
-│   └── embedder.py        # FAISS index loader, embedding generator, and search engine
-└── scraper/
-    ├── convert_catalog.py # Ingests source catalog JSON and builds FAISS index
-    └── catalog.json       # Processed clean catalog (377 verified assessments)
-```
-
----
-
-## 🚀 Local Setup & Installation
-
-### 1. Clone the repository & install dependencies
-```powershell
-git clone https://github.com/<your-username>/shl-recommender.git
-cd shl-recommender
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment Variables
-Copy `.env.example` to `.env` and insert your Gemini API Key:
-```powershell
-Copy-Item .env.example .env
-# Edit .env and set GEMINI_API_KEY=AIzaSy...
-```
-
-### 3. Build Vector Index (Run Once)
-```powershell
-python scraper/convert_catalog.py
-```
-*This verifies `catalog.json` and generates the local FAISS vector store under `retrieval/faiss_store/`.*
-
-### 4. Run the API Server
-```powershell
-uvicorn main:app --reload --port 8000
-```
-- **Interactive Swagger Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Health Check**: [http://localhost:8000/health](http://localhost:8000/health)
-
----
-
-## 🧪 Automated Testing Suite
-
-To run the local evaluation harness (verifies health check, clarification behavior, recommendation accuracy, and legal refusal):
-```powershell
-python test_api.py
-```
-
----
-
-## ☁️ Cloud Deployment (Render)
-
-1. Connect your GitHub repository to [Render.com](https://render.com).
-2. Create a new **Web Service** using the Python runtime.
-3. Set Build Command: `pip install -r requirements.txt && python scraper/convert_catalog.py`
-4. Set Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Add Environment Variable: `GEMINI_API_KEY` = `your_actual_key_here`.
+## Notes
+- The catalog database is stored locally in catalog.json. The search index is built from this file during deployment.
+- The conversation history is ingested fully on every request because the API is completely stateless.
+- Recommendation URLs are verified against the catalog to prevent the language model from generating broken links.
