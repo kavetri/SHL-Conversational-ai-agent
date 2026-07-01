@@ -5,6 +5,5 @@ requests
 beautifulsoup4
 google-generativeai
 faiss-cpu
-sentence-transformers
 python-dotenv
 httpx

@@ -1,277 +1,183 @@
 """
-embedder.py — Builds and searches the FAISS vector index.
+embedder.py — Semantic search engine using TF-IDF (Scikit-Learn).
 
-What this file does:
-1. build_index() — Takes catalog.json, converts each assessment to an
-   embedding (list of numbers representing meaning), stores in FAISS.
-   Run ONCE after scraping.
-
-2. search() — Takes a user query, converts it to an embedding,
-   finds the most similar assessments in FAISS. Called on every /chat request.
-
-WHY embeddings instead of keyword search:
-- Keyword: "Java developer" won't find "Core Java (Advanced Level)"
-- Embedding: "Java developer" WILL find "Core Java (Advanced Level)"
-  because they're semantically similar (same meaning cluster in vector space)
+Why TF-IDF instead of PyTorch or Gemini API?
+1. PyTorch (sentence-transformers) uses >500MB of RAM, causing Render Free Tier to crash with "Out of Memory".
+2. Gemini API has a strict rate limit (100 requests per minute on Free Tier), which gets blocked when we batch-embed the 377 catalog items.
+3. TF-IDF (Term Frequency-Inverse Document Frequency):
+   - Runs 100% locally.
+   - Zero API costs, zero rate limits.
+   - Extremely low memory footprint (<10MB RAM).
+   - Instant startup (no model loading or downloads).
+   - Excellent for keyword-matching assessments like ".NET", "Java", "SQL", "OPQ".
 """
 
-import json                           # for reading catalog.json
-import os                             # for file path operations
-import numpy as np                    # numpy = fast math with arrays
-import faiss                          # faiss = vector similarity search library
-from sentence_transformers import SentenceTransformer  # converts text → vectors
+import json
+import os
+import pickle
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from config import (
     CATALOG_PATH,
-    FAISS_INDEX_PATH,
-    FAISS_METADATA_PATH,
     TOP_K_RESULTS,
 )
 
-# ── Model Setup ───────────────────────────────────────────────────────────────
-
-# This is the embedding model — it converts text to a 384-dimensional vector.
-# "all-MiniLM-L6-v2" is a small, fast, and good model for semantic similarity.
-# It runs LOCALLY — no API calls needed, completely free.
-# First time it runs, it downloads the model (~80MB). After that it's cached.
-MODEL_NAME = "all-MiniLM-L6-v2"
-model_cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_cache")
-
-# We load the model once at module level so it's not reloaded on every search.
-# This is called "module-level initialization" — happens once when Python
-# first imports this file.
-print("Loading embedding model...")
-embedding_model = SentenceTransformer(MODEL_NAME, cache_folder=model_cache_path)
-print(f"Embedding model loaded: {MODEL_NAME}")
-
+# Paths for saving TF-IDF artifacts
+# We save under retrieval/faiss_store/ to match configuration paths cleanly
+TFIDF_VECTORIZER_PATH = "retrieval/faiss_store/vectorizer.pkl"
+TFIDF_MATRIX_PATH = "retrieval/faiss_store/matrix.pkl"
+METADATA_PATH = "retrieval/faiss_store/metadata.json"
 
 # ── Text Preparation ──────────────────────────────────────────────────────────
 
 def make_searchable_text(assessment: dict) -> str:
-    """
-    Combine all fields of an assessment into one searchable text string.
-    
-    Why? FAISS searches vectors, not structured data.
-    We need to encode all useful info into ONE text before embedding.
-    
-    For example:
-        {name: "Core Java Advanced", test_type: "K", description: "Tests Java..."}
-    becomes:
-        "Core Java Advanced Knowledge Skills Tests Java..."
-    
-    The embedding model then converts this whole string into a vector.
-    """
-    # Map type codes to readable words for better semantic matching
+    """Combine fields into one searchable string."""
     type_labels = {
-        "K": "Knowledge Skills",
-        "P": "Personality Behavior",
-        "A": "Ability Aptitude Cognitive Reasoning",
-        "S": "Simulation",
-        "B": "Biodata Situational Judgment",
+        "K": "Knowledge Skills Technical",
+        "P": "Personality Behavior OPQ Work Style",
+        "A": "Ability Aptitude Cognitive Reasoning Critical Thinking",
+        "S": "Simulation Interactive Roleplay",
+        "B": "Biodata Situational Judgment Scenario",
         "C": "Competencies",
         "D": "Development 360",
         "E": "Assessment Exercise",
     }
     
-    name = assessment.get("name", "")
-    test_type = assessment.get("test_type", "")
-    description = assessment.get("description", "")
+    name = assessment.get("name", "").strip()
+    test_type = assessment.get("test_type", "").strip()
+    description = assessment.get("description", "").strip()
     
-    # Expand type codes to full words
     type_text = " ".join(
         type_labels.get(t.strip(), t.strip())
         for t in test_type.split(",")
     )
     
-    # Combine everything into one string
-    # We repeat the name twice to give it more "weight" in the embedding
-    combined = f"{name} {name} {type_text} {description}"
-    
+    # We repeat the name 3 times to give it massive weight in keyword matching
+    combined = f"{name} {name} {name} {type_text} {description}"
     return combined.strip()
 
 
 # ── Index Building ────────────────────────────────────────────────────────────
 
 def build_index():
-    """
-    Read catalog.json, embed every assessment, store in FAISS.
+    """Build TF-IDF matrix and save it to disk."""
+    print("Building TF-IDF search index...")
     
-    Run this ONCE after scraping:
-        python -c "from retrieval.embedder import build_index; build_index()"
-    
-    What FAISS does:
-    - Stores vectors (lists of 384 numbers) for all assessments
-    - When you search, it finds the K most similar vectors using cosine similarity
-    - This is much faster than comparing every vector manually
-    """
-    print("Building FAISS index from catalog...")
-    
-    # Load the scraped catalog
+    if not os.path.exists(CATALOG_PATH):
+        raise FileNotFoundError(f"Catalog not found at {CATALOG_PATH}")
+        
     with open(CATALOG_PATH, "r", encoding="utf-8") as f:
         catalog = json.load(f)
-    
+        
     print(f"  Loaded {len(catalog)} assessments from catalog")
     
-    # Create searchable text for each assessment
+    # Prepare text for indexing
     texts = [make_searchable_text(item) for item in catalog]
     
-    # Convert all texts to embedding vectors
-    # This is the heavy step — runs through the neural network for each text
-    print("  Generating embeddings (this takes a minute)...")
-    embeddings = embedding_model.encode(
-        texts,
-        show_progress_bar=True,    # shows a progress bar in the terminal
-        batch_size=32,             # process 32 at a time for efficiency
-        normalize_embeddings=True, # normalize = required for cosine similarity
+    # Initialize TF-IDF Vectorizer
+    # ngram_range=(1, 2) lets it capture both single words ("Java") and phrases ("Spring Boot")
+    vectorizer = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        lowercase=True,
+        sublinear_tf=True,  # logarithmic scale for term frequency to prevent bias from long texts
     )
     
-    # embeddings is now a 2D numpy array: shape = (num_assessments, 384)
-    # Each row is one assessment's embedding vector
+    # Fit and transform the texts
+    tfidf_matrix = vectorizer.fit_transform(texts)
+    print(f"  TF-IDF Matrix shape: {tfidf_matrix.shape}")
     
-    print(f"  Embeddings shape: {embeddings.shape}")
+    # Save artifacts
+    os.makedirs(os.path.dirname(TFIDF_VECTORIZER_PATH), exist_ok=True)
     
-    # Create a FAISS index
-    # IndexFlatIP = "Flat" index with "Inner Product" (dot product) similarity
-    # With normalized vectors, inner product = cosine similarity
-    dimension = embeddings.shape[1]     # 384 — the size of each vector
-    index = faiss.IndexFlatIP(dimension)
-    
-    # Add all embeddings to the index
-    # FAISS expects float32 numpy arrays
-    index.add(embeddings.astype(np.float32))
-    
-    print(f"  FAISS index built with {index.ntotal} vectors")
-    
-    # Save the FAISS index to disk
-    # We save it so we don't have to rebuild every time the server starts
-    os.makedirs(os.path.dirname(FAISS_INDEX_PATH), exist_ok=True)
-    faiss.write_index(index, FAISS_INDEX_PATH)
-    
-    # Save the catalog metadata separately
-    # FAISS only stores vectors (numbers), not the original text/URLs.
-    # We save the catalog as a parallel list so we can look up details by index.
-    with open(FAISS_METADATA_PATH, "w", encoding="utf-8") as f:
+    with open(TFIDF_VECTORIZER_PATH, "wb") as f:
+        pickle.dump(vectorizer, f)
+        
+    with open(TFIDF_MATRIX_PATH, "wb") as f:
+        pickle.dump(tfidf_matrix, f)
+        
+    with open(METADATA_PATH, "w", encoding="utf-8") as f:
         json.dump(catalog, f, ensure_ascii=False, indent=2)
-    
-    print(f"  FAISS index saved to: {FAISS_INDEX_PATH}")
-    print(f"  Metadata saved to: {FAISS_METADATA_PATH}")
-    print("Index building complete!")
-    
-    return index, catalog
+        
+    print(f"  TF-IDF index saved successfully!")
+    return vectorizer, tfidf_matrix, catalog
 
 
 # ── Index Loading ─────────────────────────────────────────────────────────────
 
-# Module-level variables to hold the loaded index
-# Loaded once when the module is first imported, reused for every search
-_faiss_index = None
+_vectorizer = None
+_tfidf_matrix = None
 _catalog_metadata = None
 
-
 def load_index():
-    """
-    Load the FAISS index and catalog metadata from disk.
-    Called once when the server starts.
-    """
-    global _faiss_index, _catalog_metadata
+    """Load the TF-IDF vectorizer and matrix into memory."""
+    global _vectorizer, _tfidf_matrix, _catalog_metadata
     
-    if _faiss_index is not None:
-        return   # already loaded, skip
-    
-    if not os.path.exists(FAISS_INDEX_PATH):
-        raise FileNotFoundError(
-            f"FAISS index not found at {FAISS_INDEX_PATH}. "
-            "Run: python scraper/scrape_catalog.py && "
-            "python -c \"from retrieval.embedder import build_index; build_index()\""
-        )
-    
-    print("Loading FAISS index from disk...")
-    _faiss_index = faiss.read_index(FAISS_INDEX_PATH)
-    
-    with open(FAISS_METADATA_PATH, "r", encoding="utf-8") as f:
+    if _vectorizer is not None:
+        return
+        
+    if not os.path.exists(TFIDF_VECTORIZER_PATH) or not os.path.exists(TFIDF_MATRIX_PATH):
+        raise FileNotFoundError("TF-IDF artifacts not found. Run build_index() first.")
+        
+    print("Loading TF-IDF search index...")
+    with open(TFIDF_VECTORIZER_PATH, "rb") as f:
+        _vectorizer = pickle.load(f)
+        
+    with open(TFIDF_MATRIX_PATH, "rb") as f:
+        _tfidf_matrix = pickle.load(f)
+        
+    with open(METADATA_PATH, "r", encoding="utf-8") as f:
         _catalog_metadata = json.load(f)
-    
-    print(f"FAISS index loaded: {_faiss_index.ntotal} assessments indexed")
+        
+    print(f"TF-IDF index loaded: {len(_catalog_metadata)} assessments indexed")
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
 def search(query: str, k: int = TOP_K_RESULTS) -> list[dict]:
-    """
-    Search the catalog for assessments most relevant to the query.
-    
-    How it works:
-    1. Convert query text to an embedding vector (same model as build_index)
-    2. Ask FAISS: "what are the K most similar vectors to this one?"
-    3. FAISS returns indices of the top K matches
-    4. Look up those indices in the catalog metadata to get assessment details
-    5. Return the list of matching assessments
-    
-    Args:
-        query: the search query (e.g., "Java developer mid-level backend")
-        k: how many results to return (default from config)
-    
-    Returns:
-        list of assessment dicts with name, url, test_type, description
-    
-    Example:
-        results = search("personality test for sales role")
-        # Returns: [OPQ32r, OPQ MQ Sales Report, ...]
-    """
-    # Ensure the index is loaded
-    if _faiss_index is None:
+    """Search the catalog using cosine similarity on TF-IDF vectors."""
+    if _vectorizer is None:
         load_index()
+        
+    # Transform query to TF-IDF vector
+    query_vec = _vectorizer.transform([query])
     
-    # Convert query to embedding
-    # [query] = list because encode() expects a list
-    query_embedding = embedding_model.encode(
-        [query],
-        normalize_embeddings=True,   # must match how we built the index
-    )
+    # Compute cosine similarity between query vector and all catalog vectors
+    # similarity shape will be (1, num_assessments)
+    similarities = cosine_similarity(query_vec, _tfidf_matrix).flatten()
     
-    # Convert to float32 numpy array (FAISS requirement)
-    query_vector = query_embedding.astype(np.float32)
+    # Get top K indices sorted by score descending
+    top_indices = np.argsort(similarities)[::-1][:k]
     
-    # Search! 
-    # D = distances (similarity scores), I = indices of nearest neighbors
-    D, I = _faiss_index.search(query_vector, k)
-    
-    # D[0] and I[0] because we searched for 1 query (the [0] picks the first result set)
     results = []
-    for distance, idx in zip(D[0], I[0]):
-        if idx == -1:
-            continue    # FAISS returns -1 for empty slots (shouldn't happen, but safe)
-        
-        # Look up the assessment by its index in the catalog
+    for idx in top_indices:
+        score = float(similarities[idx])
+        # Only return items with a non-zero similarity score to filter out irrelevant items
+        # If no keywords match, score is 0.0
+        if score <= 0.0 and len(results) > 0:
+            continue
+            
         assessment = _catalog_metadata[idx].copy()
-        
-        # Add the similarity score (useful for debugging)
-        assessment["_score"] = float(distance)
-        
+        assessment["_score"] = score
         results.append(assessment)
-    
+        
     return results
 
 
 # ── Quick Test ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    """
-    Quick test: run this to verify the index works.
-    Usage: python retrieval/embedder.py
-    """
+    build_index()
     load_index()
-    
     test_queries = [
-        "Java developer backend senior",
-        "personality test leadership executive",
-        "customer service contact center entry level",
-        "numerical reasoning graduate",
+        "Java Developer Spring",
+        "personality OPQ32",
+        "sales supervisor ability",
     ]
-    
-    for query in test_queries:
-        print(f"\nQuery: '{query}'")
-        results = search(query, k=3)
-        for r in results:
+    for q in test_queries:
+        print(f"\nQuery: '{q}'")
+        res = search(q, k=3)
+        for r in res:
             print(f"  [{r['test_type']}] {r['name']} (score: {r['_score']:.3f})")
-            print(f"       {r['url']}")
