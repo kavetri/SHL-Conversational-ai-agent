@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from models import ChatRequest, ChatResponse, HealthResponse, Recommendation
 from llm.client import generate_response
 from llm.prompts import build_search_query
-from retrieval.embedder import load_index, search
+from retrieval.search import load_index, search
 from config import MAX_TURNS
 
 

@@ -17,7 +17,7 @@ GEMINI_TEMPERATURE: float = 0.1
 TOP_K_RESULTS: int = 15
 
 # File paths
-CATALOG_PATH: str = "scraper/catalog.json"
+CATALOG_PATH: str = "data/catalog.json"
 FAISS_INDEX_PATH: str = "retrieval/faiss_store/index.faiss"
 FAISS_METADATA_PATH: str = "retrieval/faiss_store/metadata.json"
 

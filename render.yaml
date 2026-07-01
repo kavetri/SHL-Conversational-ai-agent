@@ -2,7 +2,7 @@ services:
   - type: web
     name: shl-assessment-recommender
     runtime: python
-    buildCommand: pip install -r requirements.txt && python -c "from retrieval.embedder import build_index; build_index()"
+    buildCommand: pip install -r requirements.txt && python -c "from retrieval.search import build_index; build_index()"
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION

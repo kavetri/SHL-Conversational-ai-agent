@@ -20,7 +20,7 @@ This project is a conversational assistant that helps hiring managers and recrui
 ## Project Structure
 - llm: Contains the code for constructing prompts and communicating with the Gemini API.
 - retrieval: Contains the search index logic that finds relevant assessments from the catalog.
-- scraper: Contains the catalog database JSON file and the script that formats the catalog data.
+- data: Contains the catalog database JSON file and the script that formats the catalog data.
 
 ## How It Works
 1. The user sends a chat message to the API.

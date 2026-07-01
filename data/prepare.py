@@ -121,7 +121,7 @@ def main():
     print("=" * 60)
     
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from retrieval.embedder import build_index
+    from retrieval.search import build_index
     build_index()
     
     print("\nSUCCESS! Catalog converted and search index built ready for API!")
