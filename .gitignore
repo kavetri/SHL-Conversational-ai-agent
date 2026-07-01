@@ -1,0 +1,30 @@
+# .gitignore - files Git should never track
+# This protects your API keys and keeps junk out of your repo
+
+# Secret keys - NEVER commit this
+.env
+
+# Python cache files (auto-generated, not needed in Git)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment folder
+venv/
+env/
+.venv/
+
+# FAISS index files (large binary, regenerated from catalog.json)
+retrieval/faiss_store/
+
+# OS junk files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+
+# Playwright browser binaries
+.playwright/
